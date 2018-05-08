@@ -5,6 +5,7 @@
 //#define HAS_XINERAMA
 //#define HAS_XSHAPE
 //#define FULL_SCREEN_STEAL_FOCUS
+//#define ALLOW_ALPHA :: WARNING: CURRENTLY BROKEN (And only being worked on for full-screen)
 
 #include "CNFGFunctions.h"
 
@@ -31,6 +32,9 @@
 	static	int prepare_xshape;
 #endif
 
+#ifdef ALLOW_ALPHA
+Colormap CNFGColormap;
+#endif
 
 XWindowAttributes CNFGWinAtt;
 XClassHint *CNFGClassHint;
@@ -151,8 +155,27 @@ void CNFGSetupFullscreen( const char * WindowName, int screen_no )
 	int screen = XDefaultScreen(CNFGDisplay);
 	int xpos, ypos;
 
+#ifdef ALLOW_ALPHA
+    XVisualInfo vinfo;
+	if( !XMatchVisualInfo(CNFGDisplay, screen, 32, TrueColor, &vinfo) )
+	{
+		fprintf( stderr, "No alpha mapping available.\n" );
+	}
+
+	CNFGVisual = vinfo.visual;
+
+	printf("Matched visual 0x%lx class %d (%s) depth %d\n",
+		 vinfo.visualid,
+		 vinfo.class,
+		 vinfo.class == TrueColor ? "TrueColor" : "unknown",
+		 vinfo.depth);
+    CNFGColormap = XCreateColormap(CNFGDisplay, DefaultRootWindow(CNFGDisplay), CNFGVisual, AllocNone);
+	printf( "VISUAL: %p %p\n", CNFGVisual, CNFGColormap );
+	CNFGWinAtt.depth = 32;
+#else
  	CNFGVisual = DefaultVisual(CNFGDisplay, screen);
 	CNFGWinAtt.depth = DefaultDepth(CNFGDisplay, screen);
+#endif
 
 	if (XineramaQueryExtension(CNFGDisplay, &a, &b ) &&
 		(screeninfo = XineramaQueryScreens(CNFGDisplay, &screens)) &&
@@ -175,6 +198,7 @@ void CNFGSetupFullscreen( const char * WindowName, int screen_no )
 
 
 	XSetWindowAttributes setwinattr;
+	memset( &setwinattr, 0, sizeof(setwinattr) );
 	setwinattr.override_redirect = 1;
 	setwinattr.save_under = 1;
 #ifdef HAS_XSHAPE
@@ -190,12 +214,20 @@ void CNFGSetupFullscreen( const char * WindowName, int screen_no )
 	setwinattr.event_mask = StructureNotifyMask | SubstructureNotifyMask | ExposureMask | ButtonPressMask | ButtonReleaseMask | ButtonPressMask | PointerMotionMask | ButtonMotionMask | EnterWindowMask | LeaveWindowMask |KeyPressMask |KeyReleaseMask | SubstructureNotifyMask | FocusChangeMask;
 #endif
 	setwinattr.border_pixel = 0;
+#ifdef ALLOW_ALPHA
+	setwinattr.background_pixmap = None;
+	setwinattr.background_pixel = 0;
+	setwinattr.colormap = CNFGColormap;
+#endif
 
 	CNFGWindow = XCreateWindow(CNFGDisplay, XRootWindow(CNFGDisplay, screen),
 		xpos, ypos, CNFGWinAtt.width, CNFGWinAtt.height,
 		0, CNFGWinAtt.depth, InputOutput, CNFGVisual, 
-		CWBorderPixel | CWEventMask | CWOverrideRedirect | CWSaveUnder, 
-		&setwinattr);
+		CWBorderPixel | CWEventMask | CWOverrideRedirect | CWSaveUnder
+#ifdef ALLOW_ALPHA
+		|CWBackPixel | CWColormap
+#endif
+		, &setwinattr);
 
 	XMapWindow(CNFGDisplay, CNFGWindow);
 	XSetInputFocus( CNFGDisplay, CNFGWindow,   RevertToParent, CurrentTime );
@@ -381,7 +413,13 @@ uint32_t CNFGColor( uint32_t RGB )
 	unsigned char grn = ( RGB >> 8 ) & 0xFF;
 	unsigned char blu = ( RGB >> 16 ) & 0xFF;
 	CNFGLastColor = RGB;
+#ifdef ALLOW_ALPHA
+	unsigned char alpha = 255 - ( RGB >> 24 );
+	unsigned long color = (alpha<<24)|(red<<16)|(grn<<8)|(blu);
+	printf( "%08x\n", color );
+#else
 	unsigned long color = (red<<16)|(grn<<8)|(blu);
+#endif
 	XSetForeground(CNFGDisplay, CNFGGC, color);
 	return color;
 }
