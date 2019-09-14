@@ -103,7 +103,116 @@ void	CNFGClearTransparencyLevel()
 #include <GL/glxext.h>
 
 GLXContext CNFGCtx;
+
 void * CNFGGetExtension( const char * extname ) { return glXGetProcAddressARB((const GLubyte *) extname); }
+
+#ifndef OPENGL_NO_VERSION
+#define _GLX_CONTEXT_MAJOR_VERSION_ARB       0x2091
+#define _GLX_CONTEXT_MINOR_VERSION_ARB       0x2092
+typedef GLXContext (*glXCreateContextAttribsARBProc)(Display*, GLXFBConfig, GLXContext, Bool, const int*);
+#endif
+
+
+
+
+void CreateXOpenGLContext( int screen )
+{
+	int attribs[] = { GLX_RGBA,
+		GLX_DOUBLEBUFFER, 
+		GLX_RED_SIZE, 1,
+		GLX_GREEN_SIZE, 1,
+		GLX_BLUE_SIZE, 1,
+		GLX_DEPTH_SIZE, 1,
+		None };
+	XVisualInfo * vis = glXChooseVisual(CNFGDisplay, screen, attribs);
+	CNFGVisual = vis->visual;
+	CNFGWinAtt.depth = vis->depth;
+#ifndef OPENGL_NO_VERSION
+	glXCreateContextAttribsARBProc _glXCreateContextAttribsARB = 0;
+	_glXCreateContextAttribsARB = (glXCreateContextAttribsARBProc)glXGetProcAddressARB( (const GLubyte *) "glXCreateContextAttribsARB" );
+	if( !_glXCreateContextAttribsARB )
+	{
+#endif
+		CNFGCtx = glXCreateContext( CNFGDisplay, vis, NULL, True );
+#ifndef OPENGL_NO_VERSION
+	} else {
+		int attribs_advanced[] = {
+			GLX_X_RENDERABLE    , True,
+			GLX_DRAWABLE_TYPE   , GLX_WINDOW_BIT,
+			GLX_RENDER_TYPE     , GLX_RGBA_BIT,
+			GLX_X_VISUAL_TYPE   , GLX_TRUE_COLOR,
+			GLX_RED_SIZE        , 8,
+			GLX_GREEN_SIZE      , 8,
+			GLX_BLUE_SIZE       , 8,
+			GLX_ALPHA_SIZE      , 8,
+			GLX_DEPTH_SIZE      , 24,
+			GLX_STENCIL_SIZE    , 8,
+			GLX_DOUBLEBUFFER    , True,
+			//GLX_SAMPLE_BUFFERS  , 1,
+			//GLX_SAMPLES         , 4,
+			None
+		};
+
+		int context_attribs[] =
+		{
+			_GLX_CONTEXT_MAJOR_VERSION_ARB, 3,
+			_GLX_CONTEXT_MINOR_VERSION_ARB, 1,
+			//GLX_CONTEXT_FLAGS_ARB        , GLX_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+			None
+		};
+
+
+
+		printf( "Getting matching framebuffer configs\n" );
+		int fbcount;
+		GLXFBConfig* fbc = glXChooseFBConfig(CNFGDisplay, DefaultScreen(CNFGDisplay), attribs_advanced, &fbcount);
+		if (!fbc)
+		{
+			printf( "Failed to retrieve a framebuffer config\n" );
+			exit(1);
+		}
+		printf( "Found %d matching FB configs.\n", fbcount );
+
+		int best_fbc = -1, worst_fbc = -1, best_num_samp = -1, worst_num_samp = 999;
+
+		int i;
+		for (i=0; i<fbcount; ++i)
+		{
+			XVisualInfo *vi = glXGetVisualFromFBConfig( CNFGDisplay, fbc[i] );
+			if ( vi )
+			{
+				int samp_buf, samples;
+				glXGetFBConfigAttrib( CNFGDisplay, fbc[i], GLX_SAMPLE_BUFFERS, &samp_buf );
+				glXGetFBConfigAttrib( CNFGDisplay, fbc[i], GLX_SAMPLES       , &samples  );
+
+				printf( "  Matching fbconfig %d, visual ID 0x%2lx: SAMPLE_BUFFERS = %d,"
+					" SAMPLES = %d\n", i, vi -> visualid, samp_buf, samples );
+
+				if ( ( best_fbc < 0 || samp_buf ) && samples > best_num_samp )
+					best_fbc = i, best_num_samp = samples;
+				if ( ( worst_fbc < 0 || !samp_buf ) || samples < worst_num_samp )
+					worst_fbc = i, worst_num_samp = samples;
+			}
+			XFree( vi );
+		}
+		printf( "Best: %d\n", best_fbc );
+		GLXFBConfig bestFbc = fbc[ best_fbc ];
+
+
+		printf( "Creating context (%p)\n", _glXCreateContextAttribsARB );
+		CNFGCtx = _glXCreateContextAttribsARB( CNFGDisplay, bestFbc, 0, True, context_attribs );
+		printf( "Created %p\n", CNFGCtx );
+		// Sync to ensure any errors generated are processed.
+		XSync( CNFGDisplay, False );
+		if ( CNFGCtx == 0 )
+		{
+			printf( "Failed to open OpenGL 4.0+ context.\n" );
+			exit( -1 );
+		}
+	}
+#endif
+}
+
 #endif
 
 int FullScreen = 0;
@@ -194,17 +303,7 @@ void CNFGSetupFullscreen( const char * WindowName, int screen_no )
 	CNFGWinAtt.depth = DefaultDepth(CNFGDisplay, screen);
 
 #ifdef CNFGOGL
-	int attribs[] = { GLX_RGBA,
-		GLX_DOUBLEBUFFER, 
-		GLX_RED_SIZE, 1,
-		GLX_GREEN_SIZE, 1,
-		GLX_BLUE_SIZE, 1,
-		GLX_DEPTH_SIZE, 1,
-		None };
-	XVisualInfo * vis = glXChooseVisual(CNFGDisplay, screen, attribs);
-	CNFGVisual = vis->visual;
-	CNFGWinAtt.depth = vis->depth;
-	CNFGCtx = glXCreateContext( CNFGDisplay, vis, NULL, True );
+	CreateXOpenGLContext( screen );
 #endif
 
 	if (XineramaQueryExtension(CNFGDisplay, &a, &b ) &&
@@ -256,7 +355,9 @@ void CNFGSetupFullscreen( const char * WindowName, int screen_no )
 	InternalLinkScreenAndGo( WindowName );
 
 #ifdef CNFGOGL
+#ifdef OPENGL_NO_VERSION
 	glXMakeCurrent( CNFGDisplay, CNFGWindow, CNFGCtx );
+#endif
 #endif
 
 #else
@@ -292,17 +393,7 @@ int CNFGSetup( const char * WindowName, int w, int h )
 	Window wnd = DefaultRootWindow( CNFGDisplay );
 
 #ifdef CNFGOGL
-	int attribs[] = { GLX_RGBA,
-		GLX_DOUBLEBUFFER, 
-		GLX_RED_SIZE, 1,
-		GLX_GREEN_SIZE, 1,
-		GLX_BLUE_SIZE, 1,
-		GLX_DEPTH_SIZE, 1,
-		None };
-	XVisualInfo * vis = glXChooseVisual(CNFGDisplay, screen, attribs);
-	CNFGVisual = vis->visual;
-	depth = vis->depth;
-	CNFGCtx = glXCreateContext( CNFGDisplay, vis, NULL, True );
+	CreateXOpenGLContext( screen );
 #endif
 
 	XSetWindowAttributes attr;
@@ -317,7 +408,9 @@ int CNFGSetup( const char * WindowName, int w, int h )
 //	XSetWMProtocols( CNFGDisplay, CNFGWindow, &WM_DELETE_WINDOW, 1 );
 
 #ifdef CNFGOGL
+#ifdef OPENGL_NO_VERSION
 	glXMakeCurrent( CNFGDisplay, CNFGWindow, CNFGCtx );
+#endif
 #endif
 	return 0;
 }
